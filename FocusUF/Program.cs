@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 
 // Started with the code posted here: https://stackoverflow.com/a/18189027/206
+// Cloned from https://github.com/anotherlab/FocusUF to add other camera properties
 
 namespace FocusUF
 {
@@ -17,21 +18,30 @@ namespace FocusUF
         AutoExposure = 4,
         SetFocus = 5,
         SetExposure = 6,
-        ListCameras = 7
+        ListCameras = 7,
+        Contrast = 8,
+        Saturation = 9,
+        Brightness = 10,
+        Gamma = 11, 
+        NULL =- 1
     }
 
     class Program
     {
         // Global argument values
         static Operation _whatToDo = Operation.Usage;
-        static string _cameraName = "Microsoft® LifeCam"; // Assuming only one lifecam plugged in
+        static string _cameraName = "USB Camera"; // Assuming only one lifecam plugged in
         static int _focusSetting;
         static int _exposureSetting;
+        static int _contrastSetting;
+        static int _saturationSetting;
+        static int _brightnessSetting;
+        static int _gammaSetting;
 
         static void Main(string[] args)
         {
-            Console.WriteLine("FocusUF " + Assembly.GetEntryAssembly().GetName().Version);
-            Console.WriteLine("Get the source at https://github.com/anotherlab/FocusUF");
+            Console.WriteLine("FocusUF-ng " + Assembly.GetEntryAssembly().GetName().Version);
+            Console.WriteLine("Get the source at https://github.com/gpapp/FocusUF");
 
             var argsLists = SplitArgs(args.ToList());
 
@@ -97,6 +107,22 @@ namespace FocusUF
                     case Operation.SetExposure:
                         SetCameraValue(devs, _cameraName, CameraControlProperty.Exposure, _exposureSetting);
                         break;
+
+                    case Operation.Saturation:
+                        SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.Saturation, _saturationSetting);
+                        break;
+
+                    case Operation.Gamma:
+                        SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.Gamma, _gammaSetting);
+                        break;
+
+                    case Operation.Brightness:
+                        SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.Brightness, _brightnessSetting);
+                        break;
+
+                    case Operation.Contrast:
+                        SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.Contrast, _contrastSetting);
+                        break;
                 }
             }
 
@@ -122,6 +148,30 @@ namespace FocusUF
 
                     // Cast that filter to IAMCameraControl from the DirectShowLib
                     _camera = capFilter as IAMCameraControl;
+                }
+            }
+            return _camera;
+        }
+        /// <summary>
+        /// Gets a video processor inteface we can use from the generic device
+        /// </summary>
+        /// <param name="dev"></param>
+        /// <returns></returns>
+        static IAMVideoProcAmp GetVideoProcAmp(DsDevice dev)
+        {
+            IAMVideoProcAmp _camera = dev as IAMVideoProcAmp;
+            if (dev != null)
+            {
+                // DirectShow uses a module system called filters to exposure the functionality
+                // We create a new object that implements the IFilterGraph2 interface so that we can
+                // new filters to exposure the functionality that we need.
+                if (new FilterGraph() is IFilterGraph2 graphBuilder)
+                {
+                    // Create a video capture filter for the device
+                    graphBuilder.AddSourceFilterForMoniker(dev.Mon, null, dev.Name, out IBaseFilter capFilter);
+
+                    // Cast that filter to IAMCameraControl from the DirectShowLib
+                    _camera = capFilter as IAMVideoProcAmp;
                 }
             }
             return _camera;
@@ -172,6 +222,38 @@ namespace FocusUF
                 {
                     Console.WriteLine($"{cameraName} {camProperty} value already {val}");
                 }
+            }
+            else
+            {
+                Console.WriteLine($"No physical camera matching \"{cameraName}\" found");
+            }
+        }
+
+        static void SetVideoProcValue(DsDevice[] devs, string cameraName, VideoProcAmpProperty property, int val)
+        {
+            IAMVideoProcAmp videoProcAmp =  GetVideoProcAmp(devs.Where(d => d.Name.ToLower().Contains(cameraName.ToLower())).FirstOrDefault());
+            videoProcAmp.GetRange(property, out int min, out int max, out int steppingDelta,  out int defaultValue, out var flags);
+
+            Console.WriteLine($"min: {min}, max: {max}, steppingDelta: {steppingDelta} defaultValue: {defaultValue}, flags: {flags}");
+            val = Math.Min(val, max);
+            val = Math.Max(val, min);
+            if (videoProcAmp != null)
+            {
+                // Get the current settings from the webcam
+                videoProcAmp.Get(property, out int v, out VideoProcAmpFlags f);
+
+                // If the camera value differs from the desired value, adjust it leaving flag the same.
+                if (v != val)
+                {
+                    videoProcAmp.Set(property, val, f);
+                    Console.WriteLine($"{cameraName} {property} value set to {val}");
+                }
+                else
+                {
+                    Console.WriteLine($"{cameraName} {property} value already {val}");
+                }
+                videoProcAmp.Get(property, out int v2, out VideoProcAmpFlags f2);
+                Console.WriteLine($"Setting {property} value {(val==v2?"successful":"failed")} {cameraName} {property} value is at {v2}");
             }
             else
             {
@@ -246,7 +328,38 @@ namespace FocusUF
                 return Operation.SetExposure;
             }
 
+            Int32 argVal;
+            if ((argVal = processArgument(args,"brightness", "b"))!=int.MinValue) {
+                _brightnessSetting= argVal;
+                return Operation.Brightness;
+            }
+            if ((argVal = processArgument(args, "contrast", "c")) != int.MinValue)
+            {
+                _contrastSetting = argVal;
+                return Operation.Contrast;
+            }
+            if ((argVal = processArgument(args, "saturation", "s")) != int.MinValue)
+            {
+                _saturationSetting = argVal;
+                return Operation.Saturation;
+            }
+            if ((argVal = processArgument(args, "gamma", "g")) != int.MinValue)
+            {
+                _gammaSetting = argVal;
+                return Operation.Gamma;
+            }
+
             return Operation.Usage;
+        }
+        private static int processArgument(List<string> args, String longArg, String shortArg)
+        {
+            var argIx = args.IndexOf("--set-" + longArg);
+            argIx = argIx != -1 ? argIx : args.IndexOf("-" + shortArg);
+            if (argIx != -1 && args.Count >= argIx + 2 && int.TryParse(args[argIx + 1], out int expVal))
+            {
+                return expVal;
+            }
+            return int.MinValue;
         }
 
         static void Usage()
@@ -257,6 +370,10 @@ Usage: FocusUF [--help | -?] [--list-cameras | -l]
                [--set-focus <value> | -f <value>]
                [--exposure-mode-manual | -em] [--exposure-mode-auto | -ea]
                [--set-exposure <value> | -e <value>]
+               [--set-brightness <value> | -b <value>]
+               [--set-contrast <value> | -c <value>]
+               [--set-saturation <value> | -s <value>]
+               [--set-gamma <value> | -g <value>]
                [--camera-name <name> | -n <name>]
                [--and {more operations...}]");
         }
