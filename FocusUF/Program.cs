@@ -1,4 +1,4 @@
-﻿using DirectShowLib;
+using DirectShowLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -22,7 +22,10 @@ namespace FocusUF
         Contrast = 8,
         Saturation = 9,
         Brightness = 10,
-        Gamma = 11, 
+        Gamma = 11,
+        ManualWhiteBalance = 12,
+        AutoWhiteBalance = 13,
+        WhiteBalance = 14,
         NULL =- 1
     }
 
@@ -30,13 +33,14 @@ namespace FocusUF
     {
         // Global argument values
         static Operation _whatToDo = Operation.Usage;
-        static string _cameraName = "USB Camera"; // Assuming only one lifecam plugged in
+        static string _cameraName = "USB Camera"; // Assuming only one cam plugged in
         static int _focusSetting;
         static int _exposureSetting;
         static int _contrastSetting;
         static int _saturationSetting;
         static int _brightnessSetting;
         static int _gammaSetting;
+        static int _whiteBalanceSetting;
 
         static void Main(string[] args)
         {
@@ -52,6 +56,7 @@ namespace FocusUF
             {
                 _whatToDo = ProcessArgs(argsList);
                 IAMCameraControl camera;
+                IAMVideoProcAmp videoProcAmp;
                 switch (_whatToDo)
                 {
                     case Operation.Usage:
@@ -63,6 +68,7 @@ namespace FocusUF
                         {
                             Console.WriteLine($"Camera: {cam.Name}");
                             camera = GetCamera(cam);
+                            videoProcAmp = GetVideoProcAmp(cam);
                             if (camera != null)
                             {
                                 // Focus ranges and Values
@@ -76,6 +82,11 @@ namespace FocusUF
                                 Console.WriteLine($"    Exposure Capability: {expPossFlags}");
                                 Console.WriteLine($"    Exposure Range: {expMin} - {expMax}");
                                 Console.WriteLine($"    Exposure Setting: {expSetting}, {expValue}");
+                                videoProcAmp.GetRange(VideoProcAmpProperty.WhiteBalance, out int wbMin, out int wbMax, out int wbStep, out int wbDefault, out VideoProcAmpFlags wbCapsFlags);
+                                videoProcAmp.Get(VideoProcAmpProperty.WhiteBalance, out int wbValue, out VideoProcAmpFlags wbSetting);
+                                Console.WriteLine($"    WhiteBalance Capability: {wbCapsFlags}");
+                                Console.WriteLine($"    WhiteBalance Range: {wbMin} - {wbMax}");
+                                Console.WriteLine($"    WhiteBalance Setting: {wbSetting}, {wbValue}");
                             }
                             else
                             {
@@ -123,6 +134,19 @@ namespace FocusUF
                     case Operation.Contrast:
                         SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.Contrast, _contrastSetting);
                         break;
+
+                    case Operation.ManualWhiteBalance:
+                        SetVideoProcAmpFlags(devs, _cameraName, VideoProcAmpProperty.WhiteBalance, VideoProcAmpFlags.Manual);
+                        break;
+
+                    case Operation.AutoWhiteBalance:
+                        SetVideoProcAmpFlags(devs, _cameraName, VideoProcAmpProperty.WhiteBalance, VideoProcAmpFlags.Auto);
+                        break;
+
+                    case Operation.WhiteBalance:
+                        SetVideoProcValue(devs, _cameraName, VideoProcAmpProperty.WhiteBalance, _whiteBalanceSetting);
+                        break;
+
                 }
             }
 
@@ -229,6 +253,32 @@ namespace FocusUF
             }
         }
 
+        static void SetVideoProcAmpFlags(DsDevice[] devs, string cameraName, VideoProcAmpProperty videoProperty, VideoProcAmpFlags flagVal)
+        {
+            IAMVideoProcAmp videoProcAmp = GetVideoProcAmp(devs.Where(d => d.Name.ToLower().Contains(cameraName.ToLower())).FirstOrDefault());
+
+            if (videoProcAmp != null)
+            {
+                // Get the current settings from the webcam
+                videoProcAmp.Get(videoProperty, out int v, out VideoProcAmpFlags f);
+
+                // If the camera value differs from the desired value, adjust it leaving flag the same.
+                if (f != flagVal)
+                {
+                    videoProcAmp.Set(videoProperty, v, flagVal);
+                    Console.WriteLine($"{cameraName} {videoProperty} value set to {flagVal}");
+                }
+                else
+                {
+                    Console.WriteLine($"{cameraName} {videoProperty} value already {flagVal}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"No physical camera matching \"{cameraName}\" found");
+            }
+        }
+
         static void SetVideoProcValue(DsDevice[] devs, string cameraName, VideoProcAmpProperty property, int val)
         {
             IAMVideoProcAmp videoProcAmp =  GetVideoProcAmp(devs.Where(d => d.Name.ToLower().Contains(cameraName.ToLower())).FirstOrDefault());
@@ -312,6 +362,12 @@ namespace FocusUF
             if (args.Contains("--exposure-mode-auto") || args.Contains("-ea"))
                 return Operation.AutoExposure;
 
+            if (args.Contains("--whitebalance-mode-manual") || args.Contains("-wbm"))
+                return Operation.ManualWhiteBalance;
+
+            if (args.Contains("--whitebalance-mode-auto") || args.Contains("-wba"))
+                return Operation.AutoWhiteBalance;
+
             var focusSetArgIx = args.IndexOf("--set-focus");
             focusSetArgIx = focusSetArgIx != -1 ? focusSetArgIx : args.IndexOf("-f");
             if (focusSetArgIx != -1 && args.Count >= focusSetArgIx + 2 && int.TryParse(args[focusSetArgIx + 1], out int focusVal))
@@ -348,6 +404,11 @@ namespace FocusUF
                 _gammaSetting = argVal;
                 return Operation.Gamma;
             }
+            if ((argVal = processArgument(args, "whitebalance", "wb")) != int.MinValue)
+            {
+                _whiteBalanceSetting = argVal;
+                return Operation.WhiteBalance;
+            }
 
             return Operation.Usage;
         }
@@ -374,6 +435,8 @@ Usage: FocusUF [--help | -?] [--list-cameras | -l]
                [--set-contrast <value> | -c <value>]
                [--set-saturation <value> | -s <value>]
                [--set-gamma <value> | -g <value>]
+               [--whitebalance-mode-manual | -wbm] [--whitebalance-mode-auto | -wba]
+               [--set-whitebalance <value> | -wb <value>]
                [--camera-name <name> | -n <name>]
                [--and {more operations...}]");
         }
